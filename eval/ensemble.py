@@ -22,15 +22,20 @@ If the folder also contains "preds.pkl", evaluation is skipped for that network.
 
 """
 
+import argparse
+import glob
+import json
+import os
+import sys
+from collections import defaultdict
+
+import cPickle
 import caffe
 import numpy as np
-import cPickle
-import argparse, os, glob
-import sys
-import json
-from collections import defaultdict
+
 import vqa_data_layer
 from vqa_data_layer import LoadVQADataProvider
+
 
 def verify_all(folder_paths):
     """
@@ -49,10 +54,13 @@ def verify_all(folder_paths):
     if len(adicts) > 1:
         for a2 in adicts[1:]:
             if set(adicts[0].keys()) != set(a2.keys()):
-                print set(adicts[0].keys()) - set(a2.keys())
-                print set(a2.keys()) - set(adicts[0].keys())
+                print
+                set(adicts[0].keys()) - set(a2.keys())
+                print
+                set(a2.keys()) - set(adicts[0].keys())
                 raise Exception('Answer vocab mismatch')
     return adicts
+
 
 def verify_one(folder_path):
     """
@@ -60,7 +68,8 @@ def verify_one(folder_path):
     paths to all the files.
     """
     model_path = glob.glob(folder_path + '/tmp*.caffemodel')
-    print model_path
+    print
+    model_path
     assert len(model_path) == 1, 'one .caffemodel per folder, please'
     model_path = model_path[0]
     proto_path = folder_path + '/proto_test.prototxt'
@@ -79,8 +88,9 @@ def verify_one(folder_path):
     spatial_coord = aux['spatial_coord'] if 'spatial_coord' in aux else False
     glove = aux['glove'] if 'glove' in aux else False
     model_weight = float(aux['model_weight']) if 'model_weight' in aux else 1.0
-    #print 'weight: ', model_weight
+    # print 'weight: ', model_weight
     return model_path, proto_path, adict_path, vdict_path, batch_size, data_shape, img_feature_prefix, spatial_coord, glove, model_weight
+
 
 def get_pkl_fname(ques_file):
     if '_val2014_' in ques_file:
@@ -92,6 +102,7 @@ def get_pkl_fname(ques_file):
     else:
         raise NotImplementedError
 
+
 def eval_one(folder_path, gpuid, ques_file):
     """
     Evaluates a single model (in folder_path) on the questions in ques_file.
@@ -99,64 +110,70 @@ def eval_one(folder_path, gpuid, ques_file):
     """
 
     model_path, proto_path, adict_path, vdict_path, batch_size, data_shape, \
-                    img_feature_prefix, spatial_coord, glove, model_weight = verify_one(folder_path)
-    
+    img_feature_prefix, spatial_coord, glove, model_weight = verify_one(folder_path)
+
     dp = LoadVQADataProvider(ques_file, img_feature_prefix, vdict_path, \
-        adict_path, mode='test', batchsize=batch_size, data_shape=data_shape)
+                             adict_path, mode='test', batchsize=batch_size, data_shape=data_shape)
     total_questions = len(dp.getQuesIds())
-    print total_questions, 'total questions'
+    print
+    total_questions, 'total questions'
 
     if os.path.exists(folder_path + get_pkl_fname(ques_file)):
-        print 'Found existing prediction file, trying to load...'
+        print
+        'Found existing prediction file, trying to load...'
         with open(folder_path + get_pkl_fname(ques_file), 'r') as f:
             preds = cPickle.load(f)
         if len(preds) >= total_questions:
-            print 'Loaded.'
+            print
+            'Loaded.'
             return preds
         else:
-            print 'Number of saved answers does not match number of questions, continuing...'
+            print
+            'Number of saved answers does not match number of questions, continuing...'
 
     caffe.set_device(gpuid)
     caffe.set_mode_gpu()
 
-    vqa_data_layer.CURRENT_DATA_SHAPE = data_shape # This is a huge hack
+    vqa_data_layer.CURRENT_DATA_SHAPE = data_shape  # This is a huge hack
     vqa_data_layer.SPATIAL_COORD = spatial_coord
     vqa_data_layer.GLOVE = glove
 
     net = caffe.Net(proto_path, model_path, caffe.TEST)
 
-    print 'Model loaded:', model_path
-    print 'Image feature prefix:', img_feature_prefix
+    print
+    'Model loaded:', model_path
+    print
+    'Image feature prefix:', img_feature_prefix
     sys.stdout.flush()
-
 
     pred_layers = []
 
     epoch = 0
     while epoch == 0:
         t_word, t_cont, t_img_feature, t_answer, t_glove_matrix, t_qid_list, _, epoch = dp.get_batch_vec()
-        net.blobs['data'].data[...] = np.transpose(t_word,(1,0))
-        net.blobs['cont'].data[...] = np.transpose(t_cont,(1,0))
+        net.blobs['data'].data[...] = np.transpose(t_word, (1, 0))
+        net.blobs['cont'].data[...] = np.transpose(t_cont, (1, 0))
         net.blobs['img_feature'].data[...] = t_img_feature
-        net.blobs['label'].data[...] = t_answer # dummy
+        net.blobs['label'].data[...] = t_answer  # dummy
         if glove:
-            net.blobs['glove'].data[...] = np.transpose(t_glove_matrix, (1,0,2))
+            net.blobs['glove'].data[...] = np.transpose(t_glove_matrix, (1, 0, 2))
         net.forward()
         ans_matrix = net.blobs['prediction'].data
 
         for i in range(len(t_qid_list)):
             qid = t_qid_list[i]
-            pred_layers.append((qid, np.copy(model_weight * ans_matrix[i]))) # model_weight * answer_matrix
+            pred_layers.append((qid, np.copy(model_weight * ans_matrix[i])))  # model_weight * answer_matrix
 
         percent = 100 * float(len(pred_layers)) / total_questions
         sys.stdout.write('\r' + ('%.2f' % percent) + '%')
         sys.stdout.flush()
 
-    #print 'Saving predictions...'
-    #with open(folder_path + get_pkl_fname(ques_file), 'w') as f:
+    # print 'Saving predictions...'
+    # with open(folder_path + get_pkl_fname(ques_file), 'w') as f:
     #   cPickle.dump(pred_layers, f, protocol=-1)
-    #print 'Saved.'
+    # print 'Saved.'
     return pred_layers
+
 
 def make_rev_adict(adict):
     """
@@ -164,20 +181,23 @@ def make_rev_adict(adict):
     indices to text answers.
     """
     rev_adict = {}
-    for k,v in adict.items():
+    for k, v in adict.items():
         rev_adict[v] = k
     return rev_adict
+
 
 def softmax(arr):
     e = np.exp(arr)
     dist = e / np.sum(e)
     return dist
 
+
 def get_qid_valid_answer_dict(ques_file, adict):
     """
     Returns a dictionary mapping question IDs to valid neuron indices.
     """
-    print 'Multiple choice mode: making valid answer dictionary...'
+    print
+    'Multiple choice mode: making valid answer dictionary...'
     valid_answer_dict = {}
     with open(ques_file, 'r') as f:
         qdata = json.load(f)
@@ -190,20 +210,25 @@ def get_qid_valid_answer_dict(ques_file, adict):
             if answer in adict:
                 valid_indices.append(adict[answer])
         if len(valid_indices) == 0:
-            print "we won't be able to answer qid", qid
+            print
+            "we won't be able to answer qid", qid
         valid_answer_dict[qid] = valid_indices
     return valid_answer_dict
 
+
 def dedupe(arr):
-    print 'Deduping arr of len', len(arr)
+    print
+    'Deduping arr of len', len(arr)
     deduped = []
     seen = set()
     for qid, pred in arr:
         if qid not in seen:
             seen.add(qid)
             deduped.append((qid, pred))
-    print 'New len', len(deduped)
+    print
+    'New len', len(deduped)
     return deduped
+
 
 def reorder_one(predictions, this_adict, canonical_adict):
     index_map = {}
@@ -217,6 +242,7 @@ def reorder_one(predictions, this_adict, canonical_adict):
         reordered.append((qid, np.copy(output[index_array])))
     return reordered
 
+
 def reorder_predictions(predictions, adicts):
     """
     Reorders prediction matrices so that the unit order matches that of the
@@ -228,7 +254,8 @@ def reorder_predictions(predictions, adicts):
     for a2 in adicts[1:]:
         if adicts[0] != a2:
             need_to_reorder = True
-    print 'Reordering...' if need_to_reorder else 'No need to reorder!'
+    print
+    'Reordering...' if need_to_reorder else 'No need to reorder!'
     if not need_to_reorder:
         return predictions
     reordered = []
@@ -239,12 +266,14 @@ def reorder_predictions(predictions, adicts):
             reordered.append(predictions[i])
     return reordered
 
+
 def average_outputs(arr_of_arr, rev_adict, qid_valid_answer_dict):
     """
     Given a list of lists, where each list contains (QID, answer vector) tuples,
     returns a single dictionary which maps a question ID to the text answer.
     """
-    print 'Averaging outputs...'
+    print
+    'Averaging outputs...'
     merged = defaultdict(list)
     for arr in arr_of_arr:
         for qid, ans_vec in arr:
@@ -266,13 +295,16 @@ def average_outputs(arr_of_arr, rev_adict, qid_valid_answer_dict):
 
     return merged
 
+
 def save_json(qid_ans_dict, fname):
     tmp = []
     for qid, ans in qid_ans_dict.iteritems():
         tmp.append({u'answer': ans, u'question_id': qid})
     with open(fname, 'w') as f:
         json.dump(tmp, f)
-    print 'Saved to', fname
+    print
+    'Saved to', fname
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -280,23 +312,26 @@ def main():
     parser.add_argument('--gpu', type=int, required=True)
     parser.add_argument('--out_file', required=True)
     parser.add_argument('folders', nargs='*',
-        help='space-separated list of folders containing models')
+                        help='space-separated list of folders containing models')
     args = parser.parse_args()
     assert len(args.folders) > 0, 'please specify at least one folder'
-    print 'Folders', args.folders
+    print
+    'Folders', args.folders
 
     adicts = verify_all(args.folders)
-    print '-----------------------------------------------'
+    print
+    '-----------------------------------------------'
     qid_valid_answer_dict = None
     if 'MultipleChoice' in args.ques_file:
         qid_valid_answer_dict = get_qid_valid_answer_dict(args.ques_file, adicts[0])
 
     arr_of_arr = [eval_one(folder_path, args.gpu, args.ques_file) for folder_path in args.folders]
     arr_of_arr = [dedupe(x) for x in arr_of_arr]
-    #np.save('%s.predict_arr.npz'%args.out_file,x = arr_of_arr) 
+    # np.save('%s.predict_arr.npz'%args.out_file,x = arr_of_arr)
     reordered = reorder_predictions(arr_of_arr, adicts)
     qid_ans_dict = average_outputs(reordered, make_rev_adict(adicts[0]), qid_valid_answer_dict)
     save_json(qid_ans_dict, args.out_file)
+
 
 if __name__ == '__main__':
     main()
